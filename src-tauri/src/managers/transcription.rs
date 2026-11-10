@@ -39,6 +39,7 @@ mod chunked;
 mod job;
 mod live;
 pub mod policy;
+mod recovery;
 
 pub use job::ChunkControl;
 
@@ -246,6 +247,9 @@ pub struct TranscriptionManager {
     /// The transcribe-cpp engine: owns the worker process, its model, and
     /// recovery from crashes and hangs.
     engine: EngineSupervisor,
+    /// Independent, lazy fallback: the selected Canary worker stays loaded.
+    recovery_engine: EngineSupervisor,
+    recovery_gate: Arc<Mutex<()>>,
     model_manager: Arc<ModelManager>,
     app_handle: AppHandle,
     current_model_id: Arc<Mutex<Option<String>>>,
@@ -312,6 +316,8 @@ impl TranscriptionManager {
     pub fn new(app_handle: &AppHandle, model_manager: Arc<ModelManager>) -> Result<Self> {
         let manager = Self {
             engine: EngineSupervisor::new(!transcribe_gpu_disabled_for_host()),
+            recovery_engine: EngineSupervisor::new(!transcribe_gpu_disabled_for_host()),
+            recovery_gate: Arc::new(Mutex::new(())),
             model_manager,
             app_handle: app_handle.clone(),
             current_model_id: Arc::new(Mutex::new(None)),
@@ -498,6 +504,7 @@ impl TranscriptionManager {
     /// it. Only the worker's exit is left to wait for.
     fn begin_unload(&self) -> Unloading {
         let unloading = self.engine.unload();
+        drop(self.recovery_engine.unload());
         self.language_detector.unload();
         {
             let mut current_model = self.current_model_id.lock().unwrap();
@@ -1119,6 +1126,7 @@ impl TranscriptionManager {
     /// worker for it.
     pub fn cancel_transcription(&self) {
         self.engine.cancel();
+        self.recovery_engine.cancel();
     }
 
     /// Emit a working-phase event to the streaming overlay (spinner + label).
@@ -1439,13 +1447,116 @@ impl TranscriptionManager {
         active_model: &str,
     ) -> Result<Transcript, EngineError> {
         self.touch_activity();
-        self.engine
+        let fallback_mark = self.recovery_engine.cancel_mark();
+        let canary = self
+            .engine
+            .loaded()
+            .is_some_and(|info| info.arch == "canary" && info.variant == "canary-180m-flash");
+        let original = canary.then(|| pcm.clone());
+        let transcript = self
+            .engine
             .transcribe_since(mark, pcm, run_options.clone())
             .inspect_err(|e| {
                 if !matches!(e, EngineError::Cancelled) {
                     self.forget_model_if_engine_dropped(active_model, &e.to_string());
                 }
-            })
+            })?;
+        if !transcript.text.trim().is_empty() || !canary {
+            return Ok(transcript);
+        }
+        if self.engine.cancelled_since(mark) {
+            return Err(EngineError::Cancelled);
+        }
+        let Some(original) = original else {
+            return Ok(transcript);
+        };
+        let cleaned = recovery::clean_startup_dc(&original);
+        let settings = get_settings(&self.app_handle);
+        // Legitimate silence stays empty. Recovery must not turn background
+        // noise into invented dictation, including for headless/file inputs.
+        let speech =
+            create_smoothed_detector(settings.vad_backend, &self.app_handle).and_then(|mut vad| {
+                speech_head(
+                    &mut vad,
+                    &cleaned,
+                    settings.language_detection_window_samples(),
+                )
+            });
+        match speech {
+            Ok(speech) if speech.is_empty() => return Ok(transcript),
+            Err(error) => warn!(
+                "Canary recovery could not verify silence with VAD; attempting recovery: {error:#}"
+            ),
+            Ok(_) => {}
+        }
+        let mut retry_options = run_options.clone();
+        retry_options.timestamps = transcribe_cpp::TimestampKind::None;
+        recovery::recover_empty(
+            original,
+            cleaned,
+            |padded| self.engine.transcribe_since(mark, padded, retry_options),
+            |original| {
+                // Parakeet here is English-only; never silently change a
+                // multilingual transcription or a translation into English.
+                if run_options.language.as_deref() != Some("en")
+                    || run_options.task != Task::Transcribe
+                    || run_options.target_language.is_some()
+                {
+                    return Err(EngineError::Failed("Canary returned no text after retry. The installed Parakeet fallback supports English transcription only.".into()));
+                }
+                let _gate = self.recovery_gate.lock().unwrap_or_else(|e| e.into_inner());
+                if self.engine.cancelled_since(mark) {
+                    return Err(EngineError::Cancelled);
+                }
+                let path = self.model_manager.get_model_path(recovery::PARAKEET_MODEL)
+                    .map_err(|e| EngineError::Failed(format!("Canary returned no text after retry; Parakeet fallback is unavailable: {e}")))?;
+                let primary = self.engine.loaded().ok_or_else(|| {
+                    EngineError::Failed("The selected model was unloaded during recovery".into())
+                })?;
+                let backend = if primary.on_gpu {
+                    Backend::Auto
+                } else {
+                    Backend::Cpu
+                };
+                let device = if primary.on_gpu {
+                    resolve_gpu_device(
+                        settings.transcribe_accelerator,
+                        settings.transcribe_gpu_device.as_deref(),
+                    )
+                    .map(DeviceSelector::Key)
+                    .unwrap_or(DeviceSelector::Auto)
+                } else {
+                    DeviceSelector::Auto
+                };
+                let result = (|| {
+                    self.recovery_engine.load(LoadSpec {
+                        path,
+                        backend,
+                        device,
+                    })?;
+                    if self.engine.cancelled_since(mark) {
+                        return Err(EngineError::Cancelled);
+                    }
+                    let transcript = self.recovery_engine.transcribe_since(
+                        fallback_mark,
+                        original,
+                        RunOptions {
+                            language: Some("en".into()),
+                            timestamps: transcribe_cpp::TimestampKind::None,
+                            ..Default::default()
+                        },
+                    )?;
+                    if self.engine.cancelled_since(mark) {
+                        return Err(EngineError::Cancelled);
+                    }
+                    info!("Canary recovery used Parakeet; the selected model remains Canary");
+                    Ok(transcript)
+                })();
+                // Fallback memory is released after success, error or cancel.
+                self.recovery_engine.unload().wait();
+                result
+            },
+        )
     }
 }
 
