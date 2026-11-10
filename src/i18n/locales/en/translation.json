@@ -918,13 +918,21 @@
       },
       "fallback": {
         "label": "Fall Back to Local Model",
-        "description": "If the server can't be reached or returns an error, transcribe with the local model. Handy checks the server as soon as recording starts, so the local model can already load while you speak. Once the server answers again, the local model is unloaded."
+        "description": "Use the selected local model if the server fails or returns no text for recorded speech."
       },
       "busyTimeout": {
         "label": "Switch When Server Is Busy",
         "description": "When the server accepts the connection but doesn't answer a short test request within this time, for example because it is still transcribing a long recording, Handy uses the local model. The same applies when a recording takes longer than this time plus a quarter of its length; the server is then skipped for 30 seconds. Once the server answers quickly again, it switches back. Off only checks whether the server can be reached.",
         "off": "Off",
         "seconds": "{{seconds}} s"
+      },
+      "model": {
+        "title": "Server Model",
+        "description": "The model ID accepted by your transcription server, such as parakeet-unified-en-0.6b."
+      },
+      "streamingUrl": {
+        "title": "Streaming URL",
+        "description": "Optional Parakeet live-audio WebSocket URL. Leave empty for HTTP dictation. Streaming supports English; other languages and translation use HTTP. Dictionary corrections apply to the final text."
       }
     }
   },

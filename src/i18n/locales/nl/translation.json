@@ -918,13 +918,21 @@
       },
       "fallback": {
         "label": "Terugvallen op lokaal model",
-        "description": "Transcribeer met het lokale model als de server niet bereikbaar is of een fout geeft. Handy controleert de server zodra de opname begint, zodat het lokale model al laadt terwijl je spreekt. Reageert de server weer, dan wordt het lokale model ontladen."
+        "description": "Use the selected local model if the server fails or returns no text for recorded speech."
       },
       "busyTimeout": {
         "label": "Overschakelen als de server bezet is",
         "description": "Accepteert de server de verbinding, maar beantwoordt hij een kort testverzoek niet binnen deze tijd, bijvoorbeeld omdat hij nog een lange opname uitwerkt, dan gebruikt Handy het lokale model. Hetzelfde gebeurt als een opname langer duurt dan deze tijd plus een kwart van de opnameduur; de server wordt dan 30 seconden overgeslagen. Zodra de server weer snel reageert, schakelt Handy terug. Uit controleert alleen of de server bereikbaar is.",
         "off": "Uit",
         "seconds": "{{seconds}} s"
+      },
+      "model": {
+        "title": "Server Model",
+        "description": "The model ID accepted by your transcription server, such as parakeet-unified-en-0.6b."
+      },
+      "streamingUrl": {
+        "title": "Streaming URL",
+        "description": "Optional Parakeet live-audio WebSocket URL. Leave empty for HTTP dictation. Streaming supports English; other languages and translation use HTTP. Dictionary corrections apply to the final text."
       }
     }
   },

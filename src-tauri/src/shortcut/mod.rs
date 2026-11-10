@@ -1430,6 +1430,45 @@ pub fn change_remote_transcription_url_setting(app: AppHandle, url: String) -> R
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_remote_transcription_streaming_url_setting(
+    app: AppHandle,
+    url: String,
+) -> Result<(), String> {
+    let url = url.trim();
+    if !url.is_empty() {
+        let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+        if !matches!(parsed.scheme(), "ws" | "wss")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err("Use a ws:// or wss:// URL without credentials or a fragment".into());
+        }
+    }
+    let mut settings = settings::get_settings(&app);
+    settings.remote_transcription_streaming_url = url.to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_transcription_model_setting(
+    app: AppHandle,
+    model: String,
+) -> Result<(), String> {
+    if model.trim().is_empty() {
+        return Err("A transcription model ID is required".into());
+    }
+    let mut settings = settings::get_settings(&app);
+    settings.remote_transcription_model = model.trim().to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_remote_transcription_api_key_setting(
     app: AppHandle,
     api_key: String,

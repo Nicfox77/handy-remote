@@ -731,6 +731,8 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_append_trailing_space_setting,
             shortcut::change_remote_transcription_enabled_setting,
             shortcut::change_remote_transcription_url_setting,
+            shortcut::change_remote_transcription_streaming_url_setting,
+            shortcut::change_remote_transcription_model_setting,
             shortcut::change_remote_transcription_api_key_setting,
             shortcut::change_remote_transcription_fallback_setting,
             shortcut::change_remote_transcription_busy_timeout_ms_setting,

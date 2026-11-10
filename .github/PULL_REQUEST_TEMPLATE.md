@@ -23,4 +23,4 @@ How the change was tested. Include the result of the checks that apply:
 
 ---
 
-This is a fork of [cjpais/Handy](https://github.com/cjpais/Handy) and is developed entirely with AI assistance (Claude Code). Changes are reviewed and merged by the repository owner.
+This is a fork of [cjpais/Handy](https://github.com/cjpais/Handy) and is developed entirely with AI assistance (Codex). Changes are reviewed and merged by the repository owner.

@@ -1,5 +1,7 @@
 # Handy Remote
 
+This fork of [Hyroniem/handy-remote](https://github.com/Hyroniem/handy-remote) adds Parakeet live streaming, local dictionary correction for server results, and local recovery for empty speech results. See [the live protocol and setup](docs/parakeet-live-protocol.md).
+
 > **This is handy-remote, a fork of [Handy](https://github.com/cjpais/Handy)** that can also send recordings to an external, OpenAI-compatible Whisper server (for example faster-whisper-server, speaches or a whisper.cpp server on your own network) instead of loading a model on your own machine. Useful when a machine on your network already holds a Whisper model in GPU memory, or when your laptop is short on memory.
 >
 > - Turn it on under **Models → Transcription Server**. Set the server URL (including `/v1`) and, if your server needs one, an API key.
@@ -8,7 +10,7 @@
 > - Staying in sync with upstream: a daily workflow ([Upstream Sync](.github/workflows/upstream-sync.yml)) checks for a new upstream release tag (`vX.Y.Z`) and, if there is one, merges that tag into a branch and opens a pull request. This is a real `git merge`, so upstream history is preserved; nothing is copied or rewritten. The fork is only synced to upstream _releases_, not to every commit on upstream `main`, and a pull request is merged only after Fork Build compiles it and the remote transcription option has been tested. Merge conflicts open an issue instead.
 > - Unsigned builds for Linux, Windows and macOS (Apple Silicon and Intel): **Actions → Fork Build → Artifacts**. On macOS, allow the first launch under _System Settings → Privacy & Security → Open Anyway_, or run `xattr -dr com.apple.quarantine /Applications/Handy.app`. The built-in updater is disabled, since it would install upstream Handy over this build.
 >
-> Upstream Handy is local-only by design and will not add remote transcription, so please report issues with this feature [here](https://github.com/Hyroniem/handy-remote/issues), not upstream. Maintenance notes: [FORK.md](FORK.md).
+> Upstream Handy is local-only by design and will not add remote transcription, so please report issues with this feature [here](https://github.com/Nicfox77/handy-remote/issues), not upstream. Maintenance notes: [FORK.md](FORK.md).
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 

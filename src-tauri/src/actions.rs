@@ -529,14 +529,16 @@ impl ShortcutAction for TranscribeAction {
         // Use the app-facing model capability as the single pre-recording source
         // for live streaming decisions. Unknown support is represented as false
         // until the model registry is updated by discovery or runtime load.
-        // Live streaming runs on the local engine, so a remote server always
-        // gets the whole recording as one batch request.
-        let model_supports_streaming = !settings.remote_transcription_enabled
-            && selected_model_info
-                .as_ref()
-                .map(|m| m.supports_streaming)
-                .unwrap_or(false);
-        let vad_policy = if !settings.vad_enabled {
+        let remote_streaming = tm.remote_streaming_enabled();
+        let model_supports_streaming = remote_streaming
+            || (!settings.remote_transcription_enabled
+                && selected_model_info
+                    .as_ref()
+                    .map(|m| m.supports_streaming)
+                    .unwrap_or(false));
+        // The remote recognizer owns endpointing. Preserve pauses and the
+        // entire recording for its finalization and for local recovery.
+        let vad_policy = if remote_streaming || !settings.vad_enabled {
             VadPolicy::Disabled
         } else if model_supports_streaming {
             VadPolicy::Streaming
