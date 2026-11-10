@@ -399,6 +399,22 @@ async changeRemoteTranscriptionUrlSetting(url: string) : Promise<Result<null, st
     else return { status: "error", error: e  as any };
 }
 },
+async changeRemoteTranscriptionModelSetting(model: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_remote_transcription_model_setting", { model }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeRemoteTranscriptionStreamingUrlSetting(url: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_remote_transcription_streaming_url_setting", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeRemoteTranscriptionApiKeySetting(apiKey: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_remote_transcription_api_key_setting", { apiKey }) };
@@ -1221,7 +1237,11 @@ remote_transcription_enabled?: boolean;
 /**
  * Base URL of the OpenAI-compatible API, including the `/v1` part.
  */
-remote_transcription_url?: string; 
+remote_transcription_url?: string;
+/** Optional Parakeet live-audio WebSocket endpoint. Empty uses HTTP only. */
+remote_transcription_streaming_url?: string;
+/** Model ID requested from the OpenAI-compatible HTTP endpoint. */
+remote_transcription_model?: string;
 /**
  * Optional API key, sent as `Authorization: Bearer <key>`. Empty sends
  * no header, which is what a local server without auth expects.

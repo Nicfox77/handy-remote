@@ -19,11 +19,21 @@ export const RemoteTranscription: React.FC<RemoteTranscriptionProps> =
     const enabled = getSetting("remote_transcription_enabled") ?? false;
     const url = getSetting("remote_transcription_url") ?? "";
     const apiKey = getSetting("remote_transcription_api_key") ?? "";
+    const model = getSetting("remote_transcription_model") ?? "whisper-1";
+    const streamingUrl = getSetting("remote_transcription_streaming_url") ?? "";
     const fallback = getSetting("remote_transcription_fallback") ?? true;
     const busyTimeoutMs =
       getSetting("remote_transcription_busy_timeout_ms") ?? 2000;
     const [localUrl, setLocalUrl] = useState(url);
     const [localApiKey, setLocalApiKey] = useState(apiKey);
+    const [localModel, setLocalModel] = useState(model);
+    const [localStreamingUrl, setLocalStreamingUrl] = useState(streamingUrl);
+    useEffect(() => {
+      setLocalModel(model);
+    }, [model]);
+    useEffect(() => {
+      setLocalStreamingUrl(streamingUrl);
+    }, [streamingUrl]);
 
     useEffect(() => {
       setLocalUrl(url);
@@ -65,6 +75,60 @@ export const RemoteTranscription: React.FC<RemoteTranscriptionProps> =
               placeholder="http://127.0.0.1:8000/v1"
               variant="compact"
               disabled={isUpdating("remote_transcription_url")}
+              className="flex-1 min-w-[280px]"
+            />
+          </SettingContainer>
+        )}
+        {enabled && (
+          <SettingContainer
+            title={t("settings.remoteTranscription.model.title")}
+            description={t("settings.remoteTranscription.model.description")}
+            descriptionMode={descriptionMode}
+            grouped={grouped}
+          >
+            <Input
+              type="text"
+              value={localModel}
+              onChange={(event) => setLocalModel(event.target.value)}
+              onBlur={() => {
+                if (localModel.trim() && localModel !== model) {
+                  updateSetting(
+                    "remote_transcription_model",
+                    localModel.trim(),
+                  );
+                }
+              }}
+              placeholder="whisper-1"
+              variant="compact"
+              disabled={isUpdating("remote_transcription_model")}
+              className="flex-1 min-w-[280px]"
+            />
+          </SettingContainer>
+        )}
+        {enabled && (
+          <SettingContainer
+            title={t("settings.remoteTranscription.streamingUrl.title")}
+            description={t(
+              "settings.remoteTranscription.streamingUrl.description",
+            )}
+            descriptionMode={descriptionMode}
+            grouped={grouped}
+          >
+            <Input
+              type="text"
+              value={localStreamingUrl}
+              onChange={(event) => setLocalStreamingUrl(event.target.value)}
+              onBlur={() => {
+                if (localStreamingUrl !== streamingUrl) {
+                  updateSetting(
+                    "remote_transcription_streaming_url",
+                    localStreamingUrl.trim(),
+                  );
+                }
+              }}
+              placeholder="ws://127.0.0.1:18162/v1/audio/stream"
+              variant="compact"
+              disabled={isUpdating("remote_transcription_streaming_url")}
               className="flex-1 min-w-[280px]"
             />
           </SettingContainer>

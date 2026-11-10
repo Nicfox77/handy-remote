@@ -10,8 +10,8 @@ use transcribe_cpp::StreamOptions;
 use super::chunked::{ChunkSetup, ChunkedDecode, PendingSetup};
 use super::policy::LiveDecode;
 use super::{
-    emit_stream_text, join_chunks, lock_perf, PreviewScript, RunOutcome, RunSetup,
-    StreamFinalizeReply, StreamPerf, TranscriptionManager,
+    emit_stream_text, join_chunks, lock_perf, PreviewScript, RunOutcome, RunSetup, StreamPerf,
+    TranscriptionManager,
 };
 use crate::audio_toolkit::OutputLanguageEvidence;
 use crate::engine_supervisor::{EngineError, LoadedInfo, StreamHandle, StreamProgress};
@@ -86,7 +86,7 @@ impl<'a> LiveSession<'a> {
 
     /// The live result; `None` to transcribe the recording in batch instead.
     /// `recorded_samples` is the whole recording's length.
-    pub(super) fn finish(self, recorded_samples: usize) -> StreamFinalizeReply {
+    pub(super) fn finish(self, recorded_samples: usize) -> Result<Option<RunOutcome>, EngineError> {
         match self.decoder {
             LiveDecoder::Stream(stream, setup) => {
                 Ok(stream

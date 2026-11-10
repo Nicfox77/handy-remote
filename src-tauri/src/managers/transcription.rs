@@ -40,6 +40,7 @@ mod job;
 mod live;
 pub mod policy;
 mod recovery;
+mod remote;
 
 pub use job::ChunkControl;
 
@@ -118,7 +119,12 @@ enum StreamCmd {
     Cancel,
 }
 
-type StreamFinalizeReply = Result<Option<RunOutcome>, EngineError>;
+enum LiveOutcome {
+    Local(Box<RunOutcome>),
+    Remote(std::result::Result<String, String>),
+}
+
+type StreamFinalizeReply = Result<Option<LiveOutcome>, EngineError>;
 
 /// Routes real-time audio frames to the active streaming worker. Shared between
 /// the [`TranscriptionManager`] (opens/closes the route) and the audio recorder's
@@ -735,7 +741,11 @@ impl TranscriptionManager {
     /// finds the server unreachable or busy, so nothing is started here.
     pub fn initiate_model_load(&self, raise_notice: bool) -> bool {
         if get_settings(&self.app_handle).remote_transcription_enabled {
-            self.probe_remote_server();
+            // A live WebSocket is its own authenticated readiness check. A
+            // silent HTTP probe would compete for the same resident model.
+            if !remote::enabled(&get_settings(&self.app_handle)) {
+                self.probe_remote_server();
+            }
             return false;
         }
         self.initiate_local_model_load(raise_notice)
@@ -963,6 +973,10 @@ impl TranscriptionManager {
         self.stream_active.load(Ordering::Acquire)
     }
 
+    pub fn remote_streaming_enabled(&self) -> bool {
+        remote::enabled(&get_settings(&self.app_handle))
+    }
+
     /// Shared handle to the stream router, used by the audio recorder to feed
     /// real-time frames without going through Tauri state on every frame.
     pub fn stream_router(&self) -> Arc<StreamRouter> {
@@ -1012,6 +1026,21 @@ impl TranscriptionManager {
             active_stream_worker: Arc::clone(&self.active_stream_worker),
             stream_active: Arc::clone(&self.stream_active),
         };
+
+        let settings = get_settings(&self.app_handle);
+        if remote::enabled(&settings) {
+            let mark = self.engine.cancel_mark();
+            tauri::async_runtime::block_on(remote::run(
+                &settings,
+                &rx,
+                || cancelled.load(Ordering::Acquire) || self.engine.cancelled_since(mark),
+                |committed, tentative| emit_stream_text(&self.app_handle, committed, tentative),
+                || {
+                    self.stream_active.store(true, Ordering::Release);
+                },
+            ));
+            return;
+        }
 
         // Wait for any in-progress model load to finish (start_stream races the
         // background load kicked off when recording starts).
@@ -1070,7 +1099,10 @@ impl TranscriptionManager {
                     session.feed(pcm);
                 }
                 StreamCmd::Finalize { reply, samples } => {
-                    let _ = reply.send(session.finish(samples));
+                    let _ =
+                        reply.send(session.finish(samples).map(|result| {
+                            result.map(|outcome| LiveOutcome::Local(Box::new(outcome)))
+                        }));
                     return;
                 }
                 // Dropping the session resets the worker's stream.
@@ -1091,7 +1123,7 @@ impl TranscriptionManager {
     /// cancelled. There is no timeout here: waiting behind a model load is a
     /// queue position, not a failure (#1841), and the engine bounds the
     /// finalize itself by the audio it still has to decode.
-    fn finalize_live(&self, recorded_samples: usize) -> Result<Option<RunOutcome>> {
+    fn finalize_live(&self, recorded_samples: usize) -> Result<Option<LiveOutcome>> {
         let Some(route) = self.router.take() else {
             return Ok(None);
         };
@@ -1158,7 +1190,7 @@ impl TranscriptionManager {
         &self,
         started: Instant,
         audio: Vec<f32>,
-        live: Option<RunOutcome>,
+        live: Option<LiveOutcome>,
     ) -> Result<Transcription> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
@@ -1180,11 +1212,21 @@ impl TranscriptionManager {
 
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
+        let cancel_mark = self.engine.cancel_mark();
+        let mut local_live = None;
+        let remote_live = match live {
+            Some(LiveOutcome::Remote(result)) => Some(result.map_err(anyhow::Error::msg)),
+            Some(LiveOutcome::Local(outcome)) => {
+                local_live = Some(*outcome);
+                None
+            }
+            None => None,
+        };
 
         if settings.remote_transcription_enabled {
             let can_fall_back =
                 settings.remote_transcription_fallback && !settings.selected_model.is_empty();
-            if can_fall_back {
+            if can_fall_back && remote_live.is_none() {
                 if let Some(busy_timeout) = remote_busy_timeout(&settings) {
                     self.wait_for_remote_probe(busy_timeout);
                 }
@@ -1196,16 +1238,21 @@ impl TranscriptionManager {
             } else {
                 None
             };
-            let result = match known_state {
-                Some(RemoteServerState::Offline) => {
-                    Err(anyhow::anyhow!("server unreachable at recording start"))
-                }
-                Some(RemoteServerState::Busy) => Err(anyhow::anyhow!(
-                    "server busy: no answer within {}ms at recording start",
-                    settings.remote_transcription_busy_timeout_ms
-                )),
-                _ => self.transcribe_remote_with_deadline(&audio, &settings, can_fall_back),
-            };
+            let result = remote_live
+                .unwrap_or_else(|| match known_state {
+                    Some(RemoteServerState::Offline) => {
+                        Err(anyhow::anyhow!("server unreachable at recording start"))
+                    }
+                    Some(RemoteServerState::Busy) => Err(anyhow::anyhow!(
+                        "server busy: no answer within {}ms at recording start",
+                        settings.remote_transcription_busy_timeout_ms
+                    )),
+                    _ => self.transcribe_remote_with_deadline(&audio, &settings, can_fall_back),
+                })
+                .and_then(|text| self.check_remote_text(text, &audio, &settings));
+            if self.engine.cancelled_since(cancel_mark) {
+                return Err(EngineError::Cancelled.into());
+            }
             match result {
                 Ok(text) => {
                     self.set_remote_server_state(RemoteServerState::Online);
@@ -1247,9 +1294,9 @@ impl TranscriptionManager {
             }
         }
 
-        let outcome = match live {
+        let outcome = match local_live {
             Some(outcome) => outcome,
-            None => self.decode_batch(audio)?,
+            None => self.decode_batch_since(cancel_mark, audio)?,
         };
         let settings = get_settings(&self.app_handle);
         let language = outcome
@@ -1292,13 +1339,45 @@ impl TranscriptionManager {
 
     /// Decode a whole clip with the loaded model, loading it first if a load
     /// is under way.
-    fn decode_batch(&self, audio: Vec<f32>) -> Result<RunOutcome> {
-        // A cancel from here on (during the model-load wait or chunk planning
-        // included) stops every run of this transcription.
-        let mark = self.engine.cancel_mark();
+    fn decode_batch_since(&self, mark: CancelMark, audio: Vec<f32>) -> Result<RunOutcome> {
         self.touch_activity();
         let batch = self.batch_context(&audio)?;
+        if self.engine.cancelled_since(mark) {
+            return Err(EngineError::Cancelled.into());
+        }
         self.transcribe_cpp(mark, batch, audio)
+    }
+
+    /// Only confirmed silence may be an empty remote success. Inspect the
+    /// original recording, so text cleanup cannot conceal a decoder failure.
+    fn check_remote_text(
+        &self,
+        text: String,
+        audio: &[f32],
+        settings: &AppSettings,
+    ) -> Result<String> {
+        if text.trim().is_empty() {
+            let speech = create_smoothed_detector(settings.vad_backend, &self.app_handle).and_then(
+                |mut vad| {
+                    speech_head(
+                        &mut vad,
+                        audio,
+                        settings.language_detection_window_samples(),
+                    )
+                },
+            );
+            let speech_detected = match speech {
+                Ok(speech) => !speech.is_empty(),
+                Err(error) => {
+                    warn!(
+                        "Remote empty-result silence check failed; using local recovery: {error:#}"
+                    );
+                    true
+                }
+            };
+            return require_remote_text(text, speech_detected);
+        }
+        Ok(finish_remote_text(text, settings))
     }
 
     /// Waits out any model load, then reads what a batch transcription of
@@ -1870,6 +1949,7 @@ fn transcribe_remote(audio: &[f32], settings: &AppSettings, timeout: Duration) -
 
     let (status, body) = send_remote_request(RemoteRequest {
         url: url.clone(),
+        model: settings.remote_transcription_model.clone(),
         wav,
         language: send_language.then_some(language),
         prompt,
@@ -1888,15 +1968,6 @@ fn transcribe_remote(audio: &[f32], settings: &AppSettings, timeout: Duration) -
         .map_err(|e| anyhow::anyhow!("Unexpected response from server: {}", e))?
         .text;
 
-    let output_language = if settings.translate_to_english {
-        OutputLanguageEvidence::TranslatedToEnglish
-    } else if settings.selected_language != "auto" {
-        OutputLanguageEvidence::UserSelected(settings.selected_language.clone())
-    } else {
-        OutputLanguageEvidence::Unknown
-    };
-    let result = post_process_transcription_text(text, settings, true, &output_language, &[]);
-
     let elapsed_secs = st.elapsed().as_secs_f64();
     let audio_secs = audio.len() as f64 / 16_000.0;
     info!(
@@ -1906,13 +1977,29 @@ fn transcribe_remote(audio: &[f32], settings: &AppSettings, timeout: Duration) -
         audio_secs,
         real_time_factor(audio_secs, elapsed_secs)
     );
-    if !result.is_empty() {
-        info!(
-            "Transcription result: {}",
-            crate::utils::redact_text(&result)
-        );
+    Ok(text)
+}
+
+fn require_remote_text(text: String, speech_detected: bool) -> Result<String> {
+    if text.trim().is_empty() && speech_detected {
+        return Err(anyhow::anyhow!(
+            "Speech was recorded but the remote server returned no text"
+        ));
     }
-    Ok(result)
+    Ok(text.trim().to_string())
+}
+
+fn finish_remote_text(text: String, settings: &AppSettings) -> String {
+    let output_language = if settings.translate_to_english {
+        OutputLanguageEvidence::TranslatedToEnglish
+    } else if settings.selected_language != "auto" {
+        OutputLanguageEvidence::UserSelected(settings.selected_language.clone())
+    } else {
+        OutputLanguageEvidence::Unknown
+    };
+    // An OpenAI-compatible server may silently ignore prompt/vocabulary.
+    // Apply Handy's dictionary locally for both HTTP and WebSocket results.
+    post_process_transcription_text(text, settings, false, &output_language, &[])
 }
 
 /// The request timed out before the server answered: it accepted the
@@ -1930,6 +2017,7 @@ impl std::error::Error for RemoteTimedOut {}
 
 struct RemoteRequest {
     url: String,
+    model: String,
     wav: Vec<u8>,
     language: Option<String>,
     prompt: String,
@@ -1954,7 +2042,7 @@ fn send_remote_request(req: RemoteRequest) -> Result<(reqwest::StatusCode, Strin
                         .file_name("audio.wav")
                         .mime_str("audio/wav")?,
                 )
-                .text("model", "whisper-1")
+                .text("model", req.model)
                 .text("response_format", "json");
             if let Some(language) = req.language {
                 form = form.text("language", language);
@@ -2013,6 +2101,7 @@ fn probe_remote_responsiveness(
     };
     let result = send_remote_request(RemoteRequest {
         url: format!("{}/audio/transcriptions", base_url),
+        model: settings.remote_transcription_model.clone(),
         wav,
         language: None,
         prompt: String::new(),
@@ -2631,6 +2720,26 @@ mod tests {
         assert_eq!(
             remote_answer_deadline(busy, 16_000 * 3_600),
             REMOTE_TRANSCRIPTION_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn remote_empty_speech_requires_recovery_but_silence_does_not() {
+        assert!(require_remote_text(" \n".into(), true).is_err());
+        assert_eq!(require_remote_text(" \n".into(), false).unwrap(), "");
+        assert_eq!(require_remote_text("Hello".into(), true).unwrap(), "Hello");
+    }
+
+    #[test]
+    fn remote_dictionary_applies_even_when_a_server_ignores_the_prompt() {
+        let settings = AppSettings {
+            custom_words: vec!["Handy".into()],
+            selected_language: "en".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            finish_remote_text("i use handy every day".into(), &settings),
+            "i use Handy every day"
         );
     }
 

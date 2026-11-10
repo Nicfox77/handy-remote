@@ -606,6 +606,12 @@ pub struct AppSettings {
     /// Base URL of the OpenAI-compatible API, including the `/v1` part.
     #[serde(default = "default_remote_transcription_url")]
     pub remote_transcription_url: String,
+    /// Optional Parakeet live-audio WebSocket endpoint. Empty uses HTTP only.
+    #[serde(default)]
+    pub remote_transcription_streaming_url: String,
+    /// Model ID requested from the OpenAI-compatible HTTP endpoint.
+    #[serde(default = "default_remote_transcription_model")]
+    pub remote_transcription_model: String,
     /// Optional API key, sent as `Authorization: Bearer <key>`. Empty sends
     /// no header, which is what a local server without auth expects.
     #[serde(default)]
@@ -624,6 +630,10 @@ pub struct AppSettings {
 
 fn default_remote_transcription_url() -> String {
     "http://127.0.0.1:8000/v1".to_string()
+}
+
+fn default_remote_transcription_model() -> String {
+    "whisper-1".to_string()
 }
 
 fn default_remote_transcription_fallback() -> bool {
@@ -1132,6 +1142,8 @@ pub fn get_default_settings() -> AppSettings {
         overlay_style: default_overlay_style(),
         remote_transcription_enabled: false,
         remote_transcription_url: default_remote_transcription_url(),
+        remote_transcription_streaming_url: String::new(),
+        remote_transcription_model: default_remote_transcription_model(),
         remote_transcription_api_key: SecretString::default(),
         remote_transcription_fallback: default_remote_transcription_fallback(),
         remote_transcription_busy_timeout_ms: default_remote_transcription_busy_timeout_ms(),
